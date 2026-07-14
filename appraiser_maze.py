@@ -1,72 +1,58 @@
 import random
 from collections import deque
 
+# --------------------- Загрузка лабиринта ---------------------
 def main():
     with open('matrix_maze.txt', 'r') as file:
         lines = [line.strip() for line in file if line.strip()]
-    print(lines)
     rows, cols = map(int, lines[0].split())
     maze = [list(map(int, list(lines[i]))) for i in range(1, rows + 1)]
     start = tuple(map(int, lines[rows + 1].split()))
     end = tuple(map(int, lines[rows + 2].split()))
-    maze = maze[::-1]
+    maze = maze[::-1]          # переворот, как у вас
     return maze, rows, cols, start, end
 
 
+# --------------------- Развилки ---------------------
 def fork_func(maze):
-    rows = len(maze)
-    cols = len(maze[0])
+    rows, cols = len(maze), len(maze[0])
     fork = {}
     for i in range(rows):
         for j in range(cols):
-            moves = [(-1, 0), (1, 0), (0, -1), (0, 1)]
-            vr = [(i + m[0], j + m[1]) for m in moves]
-            for t in vr:
-                if (0 <= t[0] < rows and
-                        0 <= t[1] < cols and
-                        maze[t[0]][t[1]] != 1 and maze[i][j] != 1):
-                    fork.setdefault((i, j), set()).add(t)
-            if len(fork.get((i, j), set())) < 3:
-                fork.pop((i, j), None)
+            if maze[i][j] == 1:
+                continue
+            moves = [(-1,0), (1,0), (0,-1), (0,1)]
+            neighbors = set()
+            for dr, dc in moves:
+                nr, nc = i+dr, j+dc
+                if 0 <= nr < rows and 0 <= nc < cols and maze[nr][nc] == 0:
+                    neighbors.add((nr, nc))
+            if len(neighbors) >= 3:          # развилка: 3 или 4 свободных соседа
+                fork[(i,j)] = neighbors
     return fork
 
 
-def nearest_fork_free(vis, fork):
-    pos = []
-    for f in fork:
-        klet = fork[f]
-        fr = klet - vis
-        if fr:
-            pos.append(f)
-    return pos
-
-
+# --------------------- BFS до ближайшей свободной развилки ---------------------
 def bfs_fork_free(start, vis, fork, maze, rows, cols):
-    """
-    Ищет кратчайший путь до ближайшей развилки, у которой есть хотя бы один непосещённый сосед.
-    Возвращает (расстояние, путь) или (None, None)
-    """
     queue = deque([start])
     parent = {start: None}
     visited_bfs = {start}
-    directions = [(-1, 0), (1, 0), (0, -1), (0, 1)]
+    directions = [(-1,0), (1,0), (0,-1), (0,1)]
 
     while queue:
         cur = queue.popleft()
-        # Проверяем: является ли cur развилкой с непосещённым соседом
         if cur in fork:
-            if fork[cur] - vis:   # есть свободный проход
-                # Восстанавливаем путь
+            if fork[cur] - vis:          # есть непосещённые соседи
                 path = []
                 node = cur
                 while node is not None:
                     path.append(node)
                     node = parent[node]
                 path.reverse()
-                return len(path) - 1, path   # расстояние = число шагов
+                return len(path) - 1, path
 
         for dr, dc in directions:
-            nr, nc = cur[0] + dr, cur[1] + dc
+            nr, nc = cur[0]+dr, cur[1]+dc
             if 0 <= nr < rows and 0 <= nc < cols:
                 if maze[nr][nc] == 1:
                     continue
@@ -78,53 +64,74 @@ def bfs_fork_free(start, vis, fork, maze, rows, cols):
     return None, None
 
 
-def dfs_monte_carlo(maze, rows, cols, start, end, l, vis, fork):
-    moves = [(-1, 0), (1, 0), (0, -1), (0, 1)]
+# --------------------- Рекурсивный поиск с прыжками ---------------------
+def dfs_monte_carlo(maze, rows, cols, start, end, l, vis, fork, visited_order=None):
+    moves = [(-1,0), (1,0), (0,-1), (0,1)]
     vis.add(start)
-    print(start)
+    if visited_order is not None:
+        visited_order.append(start)
+    print(start)                     # <-- вывод текущей клетки при входе
+
     if start == end:
         return l, True
 
-    st = l
-    vr = [(start[0] + i[0], start[1] + i[1]) for i in moves]
+    vr = [(start[0]+dr, start[1]+dc) for dr, dc in moves]
     random.shuffle(vr)
 
-    for i in vr:
-        if (0 <= i[0] < rows and
-                0 <= i[1] < cols and
-                i not in vis and
-                maze[i[0]][i[1]] != 1):
-
-            res, found = dfs_monte_carlo(maze, rows, cols, i, end, l + 1, vis, fork)
+    for nb in vr:
+        if (0 <= nb[0] < rows and 0 <= nb[1] < cols and
+            nb not in vis and maze[nb[0]][nb[1]] != 1):
+            res, found = dfs_monte_carlo(maze, rows, cols, nb, end, l+1, vis, fork, visited_order)
             if found:
                 return res, True
-            l += (res)
 
-    # Все соседи посещены или привели к тупику — пробуем перепрыгнуть к ближайшей развилке
+    # Все соседи исчерпаны – прыжок к ближайшей развилке с непосещёнными проходами
     dist, path = bfs_fork_free(start, vis, fork, maze, rows, cols)
     if path is not None:
-        # Добавляем все клетки пути (кроме start, она уже в vis) в посещённые
-        for cell in path[1:]:
+        for cell in path[1:]:                 # все клетки пути, кроме стартовой
             vis.add(cell)
+            if visited_order is not None:
+                visited_order.append(cell)
+            print(cell)                       # <-- вывод каждой клетки BFS-прыжка
         fork_point = path[-1]
-        res, found = dfs_monte_carlo(maze, rows, cols, fork_point, end, l + dist, vis, fork)
+        res, found = dfs_monte_carlo(maze, rows, cols, fork_point, end, l+dist, vis, fork, visited_order)
         if found:
             return res, True
 
-    return 2 * (l - st), False
+    return -1, False
 
 
+# --------------------- Симуляция (несколько запусков) ---------------------
 def simulation(maze, rows, cols, start, end, N):
     sum_steps = 0
-    for i in range(N):
+    visit_counts = {}
+    for _ in range(N):
         vis = set()
-        fork = fork_func(maze)      # видимо, нужно вычислять fork один раз, но оставим здесь для минимальных правок
-        result = dfs_monte_carlo(maze, rows, cols, start, end, 0, vis, fork)
-        if result[1]:
-            sum_steps += result[0]
-    return sum_steps / N
+        fork = fork_func(maze)
+        visited_order = []        # если хотите сохранять полный порядок
+        res, found = dfs_monte_carlo(maze, rows, cols, start, end, 0, vis, fork, visited_order)
+        if found:
+            sum_steps += res
+        for cell in vis:
+            visit_counts[cell] = visit_counts.get(cell, 0) + 1
+
+    # Матрица частот
+    freq_matrix = [[0]*cols for _ in range(rows)]
+    for (r,c), cnt in visit_counts.items():
+        if 0 <= r < rows and 0 <= c < cols:
+            freq_matrix[r][c] = cnt
+
+    avg = sum_steps / N if N > 0 else 0
+    return avg, freq_matrix, visit_counts
 
 
-maze, rows, cols, start, end = main()
-print()
-print(simulation(maze, rows, cols, start, end, N=1))
+# --------------------- Пример запуска ---------------------
+if __name__ == "__main__":
+    maze, rows, cols, start, end = main()
+    N = 10   # число симуляций
+    avg_len, freq_mat, counts = simulation(maze, rows, cols, start, end, N)
+
+    print(f"\nСредняя длина пути за {N} симуляций: {avg_len:.2f}")
+    print("\nМатрица частоты посещений:")
+    for row in freq_mat:
+        print(" ".join(f"{v:3d}" for v in row))
